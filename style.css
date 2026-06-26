@@ -38,6 +38,7 @@ input::placeholder{color:#3E5A4A;}
 .header{max-width:1080px;margin:0 auto;padding:26px 32px 0;display:flex;justify-content:center;}
 .brand{display:flex;align-items:center;gap:13px;}
 .brand-badge{width:42px;height:42px;border-radius:8px;background:#08120C;border:1px solid #1F7A4D;display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px -4px rgba(53,245,142,.7);font-family:'Chakra Petch',sans-serif;font-weight:700;color:#35F58E;font-size:15px;letter-spacing:-.5px;text-shadow:0 0 10px rgba(53,245,142,.8);}
+.brand-logo{width:44px;height:44px;border-radius:9px;display:block;filter:drop-shadow(0 0 10px rgba(53,245,142,.55));}
 .brand-name{font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:19px;letter-spacing:.5px;color:#EAFff4;}
 
 .hero{max-width:1080px;margin:0 auto;padding:34px 32px 6px;text-align:center;}
