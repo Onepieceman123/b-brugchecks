@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B&amp;B Rugchecks — Don't get rugged.</title>
+<meta name="description" content="Paste a contract address. Get a threat score. Live on-chain rug-pull verification for Solana, Ethereum, BNB Chain, Base, Arbitrum and Polygon.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="rain"></canvas>
+<div class="mesh"></div>
+<div class="scanlines"></div>
+<div class="vignette"></div>
+
+<div class="page">
+
+  <header class="header">
+    <div class="brand">
+      <div class="brand-badge">B&amp;B</div>
+      <div class="brand-name">RUGCHECKS</div>
+    </div>
+  </header>
+
+  <section id="scan" class="hero">
+    <div class="pill"><span class="dot"></span>Rug-pull verification terminal</div>
+    <h1 class="glitch">Don't get rugged.</h1>
+    <p class="sub">Paste a contract address. Get a threat score.</p>
+  </section>
+
+  <section class="scanner-wrap">
+    <div class="scanner glow">
+      <div class="scanner-tag">// INPUT</div>
+
+      <div class="tabs" id="chainTabs"></div>
+
+      <label class="field-label">Token contract address</label>
+      <div class="input-row">
+        <input id="addressInput" class="address-input" placeholder="0x… / paste contract address" autocomplete="off" spellcheck="false">
+        <button id="scanBtn" class="scan-btn">&gt; SCAN</button>
+      </div>
+
+      <div class="samples-row">
+        <span class="samples-label">Samples:</span>
+        <div id="examples" class="examples"></div>
+      </div>
+
+      <div id="errorBox" class="error-box" hidden></div>
+    </div>
+
+    <div id="checkingBox" class="checking-box" hidden>
+      <div class="checking-row">
+        <div class="spinner"></div>
+        <div class="checking-title">SCANNING…</div>
+      </div>
+      <div class="checking-step">&gt; <span id="checkStep"></span><span class="cursor">_</span></div>
+    </div>
+
+    <div id="resultBox" class="result-box" hidden></div>
+  </section>
+
+  <section id="how" class="protocol">
+    <div class="section-tag center">// THE SCAN PROTOCOL</div>
+    <div class="protocol-grid">
+      <div class="protocol-card">
+        <div class="protocol-num">01</div>
+        <div class="protocol-title">Feed the address</div>
+        <p class="protocol-text">Drop a contract address. We pull live liquidity, ownership and holder data straight off-chain.</p>
+      </div>
+      <div class="protocol-card">
+        <div class="protocol-num">02</div>
+        <div class="protocol-title">Probe for traps</div>
+        <p class="protocol-text">Honeypot status, mint/freeze authority and whale-wallet concentration are checked in seconds.</p>
+      </div>
+      <div class="protocol-card">
+        <div class="protocol-num">03</div>
+        <div class="protocol-title">Read the verdict</div>
+        <p class="protocol-text">A blunt threat score and itemised checklist — SAFE, WARNING or CRITICAL.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="chains" class="stats">
+    <div class="stats-bar">
+      <div class="stats-left">
+        <div>
+          <div class="stat-num">Live</div>
+          <div class="stat-label">on-chain data via GoPlus</div>
+        </div>
+      </div>
+      <div class="stats-chains">SOL · ETH · BNB · BASE · ARB · POLYGON</div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-brand">B&amp;B RUGCHECKS</div>
+    <div>Not financial advice. DYOR. Guard your seed phrase.</div>
+  </footer>
+
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
