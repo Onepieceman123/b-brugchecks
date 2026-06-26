@@ -14,7 +14,7 @@
   const EXAMPLES = [
     { symbol: "BONK", chainId: "solana", address: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" },
     { symbol: "PEPE", chainId: "1", address: "0x6982508145454Ce325dDbE47a25d4ec3d2311933" },
-    { symbol: "USDT", chainId: "1", address: "0xdAC17F958D2ee523a2206206994597C13D831ec" },
+    { symbol: "USDT", chainId: "1", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7" },
   ];
 
   const DEX_CHAIN_MAP = {
@@ -88,6 +88,8 @@
 
   // ---------- address validation ----------
   function isValidAddress(addr, kind) {
+    addr = (addr || "").trim();
+    // EVM: 0x + exactly 40 hex chars, case-insensitive (mixed-case EIP-55 is valid).
     if (kind === "evm") return /^0x[a-fA-F0-9]{40}$/.test(addr);
     // Solana base58 mint addresses are typically 32-44 chars
     return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr);
