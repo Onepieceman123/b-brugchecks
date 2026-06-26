@@ -17,6 +17,58 @@
     { symbol: "USDT", chainId: "1", address: "0xdAC17F958D2ee523a2206206994597C13D831ec7" },
   ];
 
+  // Known blue-chip tokens (lowercased contract address -> symbol), keyed by chain id.
+  // Established, audited, deeply-liquid assets whose "mint authority active" /
+  // "ownership not renounced" / "concentrated holders" signals are normal, not rug vectors.
+  const BLUE_CHIP = {
+    "1": {
+      "0xdac17f958d2ee523a2206206994597c13d831ec7": "USDT",
+      "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC",
+      "0x6b175474e89094c44da98b954eedeac495271d0f": "DAI",
+      "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "WETH",
+      "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": "WBTC",
+    },
+    "56": {
+      "0x55d398326f99059ff775485246999027b3197955": "USDT",
+      "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": "USDC",
+      "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3": "DAI",
+      "0x2170ed0880ac9a755fd29b2688956bd959f933f8": "WETH",
+      "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c": "WBTC",
+    },
+    "8453": {
+      "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2": "USDT",
+      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+      "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
+      "0x4200000000000000000000000000000000000006": "WETH",
+      "0x0555e30da8f98308edb960aa94c0db47230d2b9c": "WBTC",
+    },
+    "42161": {
+      "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": "USDT",
+      "0xaf88d065e77c8cc2239327c5edb3a432268e5831": "USDC",
+      "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1": "DAI",
+      "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": "WETH",
+      "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f": "WBTC",
+    },
+    "137": {
+      "0xc2132d05d31c914a87c6611c10748aeb04b58e8f": "USDT",
+      "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359": "USDC",
+      "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063": "DAI",
+      "0x7ceb23fd6bc0add59e62ac25578270cff1b9f619": "WETH",
+      "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6": "WBTC",
+    },
+    solana: {
+      "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb": "USDT",
+      "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v": "USDC",
+      "so11111111111111111111111111111111111111112": "wSOL",
+    },
+  };
+
+  function blueChipSymbol(chainId, address) {
+    const table = BLUE_CHIP[chainId];
+    if (!table) return null;
+    return table[(address || "").trim().toLowerCase()] || null;
+  }
+
   const DEX_CHAIN_MAP = {
     solana: "solana",
     "1": "ethereum",
@@ -282,9 +334,21 @@
   }
 
   // ---------- risk scoring ----------
-  function computeRisk(t) {
+  function computeRisk(t, meta) {
+    // Honeypot / cannot-sell is never normal — unconditional forced CRITICAL.
     if (t.isHoneypot || t.cannotSellAll) {
-      return { score: 100, forced: true, reasons: ["Honeypot / cannot sell"] };
+      return { score: 100, forced: true, reasons: ["Honeypot / cannot sell"], blueChip: null };
+    }
+
+    // Known blue-chip: cap at LOW/PASS, skip the naive flags entirely.
+    const blueChip = meta ? blueChipSymbol(meta.chainId, meta.address) : null;
+    if (blueChip) {
+      return {
+        score: 5,
+        forced: false,
+        reasons: [],
+        blueChip,
+      };
     }
 
     let score = 0;
@@ -296,12 +360,24 @@
       }
     };
 
-    add(40, "Mint authority active / mintable", t.mintActive === true);
-    add(
+    // "Authority" flags (mint active / ownership not renounced) are the signals that
+    // are red flags for a fresh memecoin but normal for large, liquid, widely-held
+    // tokens. Track their contribution separately so size/liquidity can damp them.
+    let authorityPts = 0;
+    const addAuthority = (pts, label, cond) => {
+      if (cond) {
+        authorityPts += pts;
+        reasons.push(label);
+      }
+    };
+
+    addAuthority(40, "Mint authority active / mintable", t.mintActive === true);
+    addAuthority(
       30,
       "Ownership not renounced / hidden owner / can reclaim ownership",
       t.ownerRenounced === false || t.hiddenOwner || t.canTakeBackOwnership
     );
+
     add(30, "Freeze authority active", t.freezeActive === true);
     add(
       25,
@@ -334,7 +410,25 @@
       t.holderCount != null && t.holderCount < 100
     );
 
-    return { score: Math.min(100, score), forced: false, reasons };
+    // Size/liquidity dampener: a large, deeply-liquid token shouldn't be pushed into
+    // CRITICAL by authority flags alone. Cap the authority contribution so the worst
+    // case lands in WARNING (<=60), not CRITICAL. Genuine danger from concentrated
+    // holders, honeypots, taxes, etc. (the `score` bucket) is untouched.
+    const isLargeLiquid =
+      t.marketCap != null && t.marketCap > 50e6 &&
+      t.liquidityUsd != null && t.liquidityUsd > 1e6;
+
+    let damped = false;
+    if (isLargeLiquid && authorityPts > 0) {
+      const maxAuthority = Math.max(0, 60 - score);
+      if (authorityPts > maxAuthority) {
+        authorityPts = maxAuthority;
+        damped = true;
+      }
+    }
+
+    const total = Math.min(100, score + authorityPts);
+    return { score: total, forced: false, reasons, blueChip: null, damped };
   }
 
   function band(score) {
@@ -413,7 +507,7 @@
 
   // ---------- rendering result ----------
   function renderResult(t, meta) {
-    const risk = computeRisk(t);
+    const risk = computeRisk(t, meta);
     const b = band(risk.score);
     const V = VERDICTS[b];
     const ringDeg = Math.round((risk.score / 100) * 360);
@@ -484,6 +578,21 @@
       { label: "Total Liquidity (USD)", value: fmtUsd(t.liquidityUsd), color: usdColor(t.liquidityUsd) },
     ];
 
+    let noteHtml = "";
+    if (risk.blueChip) {
+      noteHtml = `
+      <div class="context-note context-blue">
+        <span class="context-note-icon">✓</span>
+        <span>Verified blue-chip ($${risk.blueChip}) — established, audited, deeply-liquid asset. Authority flags that are normal for major tokens are suppressed.</span>
+      </div>`;
+    } else if (risk.damped) {
+      noteHtml = `
+      <div class="context-note context-blue">
+        <span class="context-note-icon">ℹ</span>
+        <span>Large, deeply-liquid token (market cap &gt; $50M, liquidity &gt; $1M). Mint/ownership flags alone are capped below CRITICAL — concentrated holders or a honeypot would still escalate.</span>
+      </div>`;
+    }
+
     const html = `
       <div class="threat-banner" style="background:${V.bg};border:1px solid ${V.border};box-shadow:0 0 40px -14px ${V.glow};">
         <div class="score-ring" style="background:conic-gradient(${V.color} ${ringDeg}deg, #122E1F ${ringDeg}deg); box-shadow:0 0 26px -6px ${V.glow};">
@@ -498,6 +607,7 @@
           <div class="threat-sub">${V.sub}</div>
         </div>
       </div>
+      ${noteHtml}
 
       <div class="checklist">
         <div class="checklist-head">
@@ -625,6 +735,7 @@
 
       renderResult(t, {
         address,
+        chainId: chain.id,
         chainLabel: chain.label,
         kind: chain.kind,
       });
