@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://onepieceman123.github.io/b-brugchecks/sitemap.xml
