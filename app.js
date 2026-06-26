@@ -17,6 +17,15 @@
     { symbol: "USDT", chainId: "1", address: "0xdAC17F958D2ee523a2206206994597C13D831ec" },
   ];
 
+  const DEX_CHAIN_MAP = {
+    solana: "solana",
+    "1": "ethereum",
+    "56": "bsc",
+    "8453": "base",
+    "42161": "arbitrum",
+    "137": "polygon",
+  };
+
   const STEPS = [
     "reading contract bytecode",
     "probing liquidity pool",
@@ -111,6 +120,57 @@
     const data = key ? result[key] : null;
     if (!data || Object.keys(data).length === 0) return null;
     return data;
+  }
+
+  // ---------- DexScreener API ----------
+  async function fetchDexScreenerData(address, chainId) {
+    const empty = { priceUsd: null, priceChange24h: null, marketCap: null, liquidityUsd: null };
+    try {
+      const res = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return empty;
+      const json = await res.json();
+      const pairs = Array.isArray(json.pairs) ? json.pairs : [];
+      const dexChainId = DEX_CHAIN_MAP[chainId];
+      const candidates = dexChainId
+        ? pairs.filter((p) => p.chainId === dexChainId)
+        : pairs;
+      if (!candidates.length) return empty;
+
+      const primary = candidates.reduce((best, p) => {
+        const liq = Number(p.liquidity && p.liquidity.usd) || 0;
+        const bestLiq = best ? Number(best.liquidity && best.liquidity.usd) || 0 : -1;
+        return liq > bestLiq ? p : best;
+      }, null);
+      if (!primary) return empty;
+
+      const priceUsd = primary.priceUsd != null ? Number(primary.priceUsd) : null;
+      const priceChange24h =
+        primary.priceChange && primary.priceChange.h24 != null
+          ? Number(primary.priceChange.h24)
+          : null;
+      const marketCap =
+        primary.marketCap != null
+          ? Number(primary.marketCap)
+          : primary.fdv != null
+          ? Number(primary.fdv)
+          : null;
+      const liquidityUsd =
+        primary.liquidity && primary.liquidity.usd != null
+          ? Number(primary.liquidity.usd)
+          : null;
+
+      return {
+        priceUsd: Number.isFinite(priceUsd) ? priceUsd : null,
+        priceChange24h: Number.isFinite(priceChange24h) ? priceChange24h : null,
+        marketCap: Number.isFinite(marketCap) ? marketCap : null,
+        liquidityUsd: Number.isFinite(liquidityUsd) ? liquidityUsd : null,
+      };
+    } catch {
+      return empty;
+    }
   }
 
   // ---------- field mapping ----------
@@ -322,6 +382,20 @@
     if (n >= 1e3) return "$" + Math.round(n / 1e3) + "K";
     return "$" + Math.round(n);
   }
+  function fmtPrice(n) {
+    if (n == null || !Number.isFinite(n)) return "—";
+    if (n >= 1) return "$" + n.toFixed(2);
+    if (n >= 0.01) return "$" + n.toFixed(4);
+    return "$" + n.toPrecision(2);
+  }
+  function fmtChange(n) {
+    if (n == null || !Number.isFinite(n)) return "—";
+    return (n >= 0 ? "+" : "") + n.toFixed(1) + "%";
+  }
+  function changeColor(n) {
+    if (n == null || !Number.isFinite(n)) return "#8FB6A1";
+    return n >= 0 ? "#35F58E" : "#FF5470";
+  }
   function fmtPct(n) {
     if (n == null || !Number.isFinite(n)) return "—";
     return n.toFixed(1) + "%";
@@ -356,23 +430,53 @@
         value: `${t.name || "Unknown"}  ${t.symbol ? "$" + t.symbol : ""}`,
         color: "#CFE9DA",
       },
+      { label: "Price (USD)", value: fmtPrice(t.priceUsd), color: "#CFE9DA" },
+      {
+        label: "24h Change",
+        value: fmtChange(t.priceChange24h),
+        color: changeColor(t.priceChange24h),
+      },
+      { label: "Market Cap", value: fmtUsd(t.marketCap), color: "#CFE9DA" },
       { label: "Total Supply", value: fmtNum(t.totalSupply), color: "#CFE9DA" },
       { label: "Holder Count", value: fmtNum(t.holderCount), color: "#CFE9DA" },
     ];
 
     const secRows = [
-      { label: "Mint Authority Renounced", ...badge(t.mintActive === false, t.mintActive == null) },
+      t.mintActive != null && {
+        label: "Mint Authority Renounced",
+        ...badge(t.mintActive === false, false),
+      },
       meta.kind === "evm"
-        ? { label: "Ownership Renounced", ...badge(t.ownerRenounced === true, t.ownerRenounced == null) }
-        : { label: "Freeze Authority Renounced", ...badge(t.freezeActive === false, t.freezeActive == null) },
-      { label: "Liquidity Locked", ...badge(t.lpLockedPct != null && t.lpLockedPct >= 50, t.lpLockedPct == null) },
-      { label: "Not a Honeypot (can sell)", ...badge(!t.isHoneypot && !t.cannotSellAll, meta.kind === "solana") },
-    ];
+        ? t.ownerRenounced != null && {
+            label: "Ownership Renounced",
+            ...badge(t.ownerRenounced === true, false),
+          }
+        : t.freezeActive != null && {
+            label: "Freeze Authority Renounced",
+            ...badge(t.freezeActive === false, false),
+          },
+      t.lpLockedPct != null && {
+        label: "Liquidity Locked",
+        ...badge(t.lpLockedPct >= 50, false),
+      },
+      meta.kind !== "solana" && {
+        label: "Not a Honeypot (can sell)",
+        ...badge(!t.isHoneypot && !t.cannotSellAll, false),
+      },
+    ].filter(Boolean);
 
     const distRows = [
-      { label: "Top 10 Holders", value: fmtPct(t.top10Pct), color: pctColor(t.top10Pct, 20, 45) },
-      { label: "Dev / Creator Wallet", value: fmtPct(t.devPct), color: pctColor(t.devPct, 5, 15) },
-    ];
+      t.top10Pct != null && {
+        label: "Top 10 Holders",
+        value: fmtPct(t.top10Pct),
+        color: pctColor(t.top10Pct, 20, 45),
+      },
+      t.devPct != null && {
+        label: "Dev / Creator Wallet",
+        value: fmtPct(t.devPct),
+        color: pctColor(t.devPct, 5, 15),
+      },
+    ].filter(Boolean);
 
     const liqRows = [
       { label: "Total Liquidity (USD)", value: fmtUsd(t.liquidityUsd), color: usdColor(t.liquidityUsd) },
@@ -494,7 +598,10 @@
     }, 340);
 
     try {
-      const raw = await fetchTokenSecurity(chain.id, address, chain.kind);
+      const [raw, dex] = await Promise.all([
+        fetchTokenSecurity(chain.id, address, chain.kind),
+        fetchDexScreenerData(address, chain.id),
+      ]);
       clearInterval(stepTimer);
       checkingBox.hidden = true;
       scanBtn.disabled = false;
@@ -508,6 +615,12 @@
       }
 
       const t = chain.kind === "solana" ? mapSolana(raw) : mapEvm(raw);
+      t.priceUsd = dex.priceUsd;
+      t.priceChange24h = dex.priceChange24h;
+      t.marketCap = dex.marketCap;
+      // Prefer DexScreener's pair liquidity (more reliable) over GoPlus's dex-list sum.
+      if (dex.liquidityUsd != null) t.liquidityUsd = dex.liquidityUsd;
+
       renderResult(t, {
         address,
         chainLabel: chain.label,
