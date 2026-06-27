@@ -69,6 +69,99 @@
     return table[(address || "").trim().toLowerCase()] || null;
   }
 
+  // Trust Wallet assets repo folder per chain id (icon fallback for EVM tokens).
+  const TRUSTWALLET_CHAIN = {
+    "1": "ethereum",
+    "56": "smartchain",
+    "8453": "base",
+    "42161": "arbitrum",
+    "137": "polygon",
+  };
+
+  // ---------- keccak-256 (for EIP-55 address checksums) ----------
+  // Trust Wallet asset paths use checksummed addresses, so we need keccak-256.
+  // Compact BigInt implementation — only ever hashes a 40-char hex string.
+  const KECCAK_RC = [
+    1n, 0x8082n, 0x800000000000808an, 0x8000000080008000n, 0x808bn, 0x80000001n,
+    0x8000000080008081n, 0x8000000000008009n, 0x8an, 0x88n, 0x80008009n, 0x8000000an,
+    0x8000808bn, 0x800000000000008bn, 0x8000000000008089n, 0x8000000000008003n,
+    0x8000000000008002n, 0x8000000000000080n, 0x800an, 0x800000008000000an,
+    0x8000000080008081n, 0x8000000000008080n, 0x80000001n, 0x8000000080008008n,
+  ];
+  const KECCAK_ROT = [
+    [0, 36, 3, 41, 18],
+    [1, 44, 10, 45, 2],
+    [62, 6, 43, 15, 61],
+    [28, 55, 25, 21, 56],
+    [27, 20, 39, 8, 14],
+  ];
+  function keccak256Hex(bytes) {
+    const MASK = (1n << 64n) - 1n;
+    const rot = (x, n) => ((x << n) | (x >> (64n - n))) & MASK;
+    const A = Array.from({ length: 5 }, () => [0n, 0n, 0n, 0n, 0n]);
+    const rate = 136; // bytes, keccak-256
+    const padLen = rate - (bytes.length % rate);
+    const padded = new Uint8Array(bytes.length + padLen);
+    padded.set(bytes);
+    padded[bytes.length] ^= 0x01;
+    padded[padded.length - 1] ^= 0x80;
+
+    for (let off = 0; off < padded.length; off += rate) {
+      for (let i = 0; i < rate / 8; i++) {
+        let lane = 0n;
+        for (let b = 7; b >= 0; b--) lane = (lane << 8n) | BigInt(padded[off + i * 8 + b]);
+        A[i % 5][(i / 5) | 0] ^= lane;
+      }
+      for (let round = 0; round < 24; round++) {
+        const C = [0n, 0n, 0n, 0n, 0n];
+        for (let x = 0; x < 5; x++) C[x] = A[x][0] ^ A[x][1] ^ A[x][2] ^ A[x][3] ^ A[x][4];
+        const D = [0n, 0n, 0n, 0n, 0n];
+        for (let x = 0; x < 5; x++) D[x] = C[(x + 4) % 5] ^ rot(C[(x + 1) % 5], 1n);
+        for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) A[x][y] ^= D[x];
+        const B = Array.from({ length: 5 }, () => [0n, 0n, 0n, 0n, 0n]);
+        for (let x = 0; x < 5; x++)
+          for (let y = 0; y < 5; y++)
+            B[y][(2 * x + 3 * y) % 5] = rot(A[x][y], BigInt(KECCAK_ROT[x][y]));
+        for (let x = 0; x < 5; x++)
+          for (let y = 0; y < 5; y++)
+            A[x][y] = B[x][y] ^ (~B[(x + 1) % 5][y] & B[(x + 2) % 5][y]);
+        A[0][0] ^= KECCAK_RC[round];
+      }
+    }
+
+    let out = "";
+    for (let i = 0; i < 25 && out.length < 64; i++) {
+      const lane = A[i % 5][(i / 5) | 0];
+      for (let b = 0; b < 8 && out.length < 64; b++) {
+        out += Number((lane >> BigInt(8 * b)) & 0xffn).toString(16).padStart(2, "0");
+      }
+    }
+    return out;
+  }
+
+  function toChecksumAddress(address) {
+    const addr = address.toLowerCase().replace(/^0x/, "");
+    const ascii = new Uint8Array(addr.length);
+    for (let i = 0; i < addr.length; i++) ascii[i] = addr.charCodeAt(i);
+    const hash = keccak256Hex(ascii);
+    let out = "0x";
+    for (let i = 0; i < addr.length; i++) {
+      out += parseInt(hash[i], 16) >= 8 ? addr[i].toUpperCase() : addr[i];
+    }
+    return out;
+  }
+
+  function trustWalletIcon(chainId, address) {
+    const folder = TRUSTWALLET_CHAIN[chainId];
+    if (!folder) return null;
+    try {
+      const checksummed = toChecksumAddress(address);
+      return `https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/${folder}/assets/${checksummed}/logo.png`;
+    } catch {
+      return null;
+    }
+  }
+
   const DEX_CHAIN_MAP = {
     solana: "solana",
     "1": "ethereum",
@@ -178,7 +271,7 @@
 
   // ---------- DexScreener API ----------
   async function fetchDexScreenerData(address, chainId) {
-    const empty = { priceUsd: null, priceChange24h: null, marketCap: null, liquidityUsd: null, pairCreatedAt: null };
+    const empty = { priceUsd: null, priceChange24h: null, marketCap: null, liquidityUsd: null, pairCreatedAt: null, imageUrl: null };
     try {
       const res = await fetch(
         `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`,
@@ -217,6 +310,9 @@
           : null;
       const pairCreatedAt =
         primary.pairCreatedAt != null ? Number(primary.pairCreatedAt) : null;
+      // Token logo from the pair's profile info, when present.
+      const imageUrl =
+        primary.info && primary.info.imageUrl ? String(primary.info.imageUrl) : null;
 
       return {
         priceUsd: Number.isFinite(priceUsd) ? priceUsd : null,
@@ -224,6 +320,7 @@
         marketCap: Number.isFinite(marketCap) ? marketCap : null,
         liquidityUsd: Number.isFinite(liquidityUsd) ? liquidityUsd : null,
         pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
+        imageUrl,
       };
     } catch {
       return empty;
@@ -241,6 +338,7 @@
       topHolderPct: null,
       devPct: null,
       score: null,
+      imageUrl: null,
     };
     try {
       const res = await fetch(
@@ -292,7 +390,14 @@
       const score =
         j.score_normalised != null ? numOrNull(j.score_normalised) : numOrNull(j.score);
 
-      return { present: true, lpLockedPct, top10Pct, topHolderPct, devPct, score };
+      // Token logo from resolved metadata.
+      const imageUrl =
+        (j.fileMeta && j.fileMeta.image) ||
+        (j.tokenMeta && j.tokenMeta.image) ||
+        (j.metadata && (j.metadata.image || j.metadata.logoURI)) ||
+        null;
+
+      return { present: true, lpLockedPct, top10Pct, topHolderPct, devPct, score, imageUrl: imageUrl ? String(imageUrl) : null };
     } catch {
       return empty;
     }
@@ -653,7 +758,7 @@
     const infoRows = [
       {
         label: "Name / Symbol",
-        value: `${t.name || "Unknown"}  ${t.symbol ? "$" + t.symbol : ""}`,
+        value: `<span class="token-name"><span id="tokenIcon" class="token-icon-wrap"></span><span>${t.name || "Unknown"}  ${t.symbol ? "$" + t.symbol : ""}</span></span>`,
         color: "#CFE9DA",
       },
       { label: "Price (USD)", value: fmtPrice(t.priceUsd), color: "#CFE9DA" },
@@ -825,6 +930,32 @@
     resultBox.innerHTML = html;
     resultBox.hidden = false;
     document.getElementById("newScanBtn").addEventListener("click", reset);
+    mountTokenIcon(document.getElementById("tokenIcon"), t.iconUrls || [], t.symbol);
+  }
+
+  // Render the token icon: show a letter placeholder immediately, then try each
+  // candidate URL in order and swap in the first that loads. If none load, the
+  // placeholder stays — the layout never breaks.
+  function mountTokenIcon(el, urls, symbol) {
+    if (!el) return;
+    const ch = ((symbol || "?").trim().charAt(0) || "?").toUpperCase();
+    el.innerHTML = `<span class="token-icon token-icon-ph">${ch}</span>`;
+    let i = 0;
+    const tryNext = () => {
+      if (i >= urls.length) return;
+      const url = urls[i++];
+      const img = new Image();
+      img.onload = () => {
+        img.className = "token-icon";
+        img.alt = (symbol ? "$" + symbol : "token") + " icon";
+        el.innerHTML = "";
+        el.appendChild(img);
+      };
+      img.onerror = tryNext;
+      img.referrerPolicy = "no-referrer";
+      img.src = url;
+    };
+    tryNext();
   }
 
   function showError(msg) {
@@ -910,14 +1041,26 @@
       t.ageHours =
         dex.pairCreatedAt != null ? (Date.now() - dex.pairCreatedAt) / 3.6e6 : null;
 
+      // Ordered icon fallbacks: DexScreener logo, then Trust Wallet (EVM) /
+      // RugCheck metadata (Solana). Rendered with a letter placeholder if all miss.
+      const iconUrls = [];
+      if (dex.imageUrl) iconUrls.push(dex.imageUrl);
+      if (chain.kind === "evm") {
+        const tw = trustWalletIcon(chain.id, address);
+        if (tw) iconUrls.push(tw);
+      }
+
       // RugCheck (Solana): fill the holder/LP fields GoPlus leaves empty on Solana.
       if (rug && rug.present) {
         if (t.lpLockedPct == null && rug.lpLockedPct != null) t.lpLockedPct = rug.lpLockedPct;
         if (t.top10Pct == null && rug.top10Pct != null) t.top10Pct = rug.top10Pct;
         if (t.devPct == null && rug.devPct != null) t.devPct = rug.devPct;
+        if (rug.imageUrl) iconUrls.push(rug.imageUrl);
         t.rugcheckPresent = true;
         t.rugcheckScore = rug.score;
       }
+
+      t.iconUrls = iconUrls;
 
       // Honeypot.is (EVM): second-opinion honeypot verdict + measured taxes.
       if (hp && hp.present) {

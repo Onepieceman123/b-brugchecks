@@ -101,6 +101,10 @@ h1.glitch{font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:62px;l
 .row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:10px 0;border-bottom:1px solid #0E2417;}
 .row-label{font-size:14px;letter-spacing:.3px;color:#8FB6A1;}
 .row-value{font-size:14px;font-weight:700;text-align:right;}
+.token-name{display:inline-flex;align-items:center;gap:9px;justify-content:flex-end;}
+.token-icon-wrap{display:inline-flex;flex-shrink:0;}
+.token-icon{width:26px;height:26px;border-radius:50%;object-fit:cover;display:block;background:#0B1A12;border:1px solid #1F7A4D;flex-shrink:0;}
+.token-icon-ph{display:flex;align-items:center;justify-content:center;font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:13px;color:#040705;background:#35F58E;border:none;box-shadow:0 0 12px -3px rgba(53,245,142,.8);}
 .sec-row{display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid #0E2417;}
 .sec-label{flex:1;font-size:14px;letter-spacing:.3px;color:#CFE9DA;}
 .sec-icon{width:24px;height:24px;border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:1px solid;}
