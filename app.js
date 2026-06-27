@@ -178,7 +178,7 @@
 
   // ---------- DexScreener API ----------
   async function fetchDexScreenerData(address, chainId) {
-    const empty = { priceUsd: null, priceChange24h: null, marketCap: null, liquidityUsd: null };
+    const empty = { priceUsd: null, priceChange24h: null, marketCap: null, liquidityUsd: null, pairCreatedAt: null };
     try {
       const res = await fetch(
         `https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(address)}`,
@@ -215,12 +215,111 @@
         primary.liquidity && primary.liquidity.usd != null
           ? Number(primary.liquidity.usd)
           : null;
+      const pairCreatedAt =
+        primary.pairCreatedAt != null ? Number(primary.pairCreatedAt) : null;
 
       return {
         priceUsd: Number.isFinite(priceUsd) ? priceUsd : null,
         priceChange24h: Number.isFinite(priceChange24h) ? priceChange24h : null,
         marketCap: Number.isFinite(marketCap) ? marketCap : null,
         liquidityUsd: Number.isFinite(liquidityUsd) ? liquidityUsd : null,
+        pairCreatedAt: Number.isFinite(pairCreatedAt) ? pairCreatedAt : null,
+      };
+    } catch {
+      return empty;
+    }
+  }
+
+  // ---------- RugCheck.xyz API (Solana, keyless) ----------
+  // Best-effort second source: LP-lock %, holder concentration, dev/creator holding,
+  // and RugCheck's own normalised risk score. Never throws — returns nulls on failure.
+  async function fetchRugCheck(mint) {
+    const empty = {
+      present: false,
+      lpLockedPct: null,
+      top10Pct: null,
+      topHolderPct: null,
+      devPct: null,
+      score: null,
+    };
+    try {
+      const res = await fetch(
+        `https://api.rugcheck.xyz/v1/tokens/${encodeURIComponent(mint)}/report`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return empty;
+      const j = await res.json();
+
+      // LP locked %: take the deepest market's lp.lpLockedPct.
+      let lpLockedPct = null;
+      if (Array.isArray(j.markets) && j.markets.length) {
+        let bestLiq = -1;
+        j.markets.forEach((m) => {
+          const lp = m && m.lp ? m.lp : {};
+          const pct = numOrNull(lp.lpLockedPct);
+          const liq = numOrNull(lp.lpLockedUSD) || 0;
+          if (pct != null && liq >= bestLiq) {
+            bestLiq = liq;
+            lpLockedPct = pct;
+          }
+        });
+      }
+      if (lpLockedPct == null) lpLockedPct = numOrNull(j.lpLockedPct);
+
+      // Holder concentration from topHolders[].pct (already percentages).
+      let top10Pct = null;
+      let topHolderPct = null;
+      if (Array.isArray(j.topHolders) && j.topHolders.length) {
+        const pcts = j.topHolders.map((h) => numOrNull(h.pct)).filter((v) => v != null);
+        if (pcts.length) {
+          top10Pct = pcts.slice(0, 10).reduce((a, b) => a + b, 0);
+          topHolderPct = pcts[0];
+        }
+      }
+
+      // Dev/creator holding: creator address found among top holders.
+      let devPct = null;
+      const creator = j.creator || (j.tokenMeta && j.tokenMeta.updateAuthority) || null;
+      if (creator && Array.isArray(j.topHolders)) {
+        const h = j.topHolders.find(
+          (x) => x && (x.owner === creator || x.address === creator)
+        );
+        if (h) devPct = numOrNull(h.pct);
+      }
+      if (devPct == null) devPct = numOrNull(j.creatorBalancePct);
+
+      // Normalised risk score (0-100, higher = riskier).
+      const score =
+        j.score_normalised != null ? numOrNull(j.score_normalised) : numOrNull(j.score);
+
+      return { present: true, lpLockedPct, top10Pct, topHolderPct, devPct, score };
+    } catch {
+      return empty;
+    }
+  }
+
+  // ---------- Honeypot.is API (EVM, keyless) ----------
+  // Best-effort live buy/sell simulation: honeypot verdict + real measured taxes.
+  // Never throws — returns nulls on failure.
+  async function fetchHoneypotIs(address, chainId) {
+    const empty = { present: false, isHoneypot: null, buyTaxPct: null, sellTaxPct: null };
+    try {
+      const res = await fetch(
+        `https://api.honeypot.is/v2/IsHoneypot?address=${encodeURIComponent(address)}&chainID=${encodeURIComponent(chainId)}`,
+        { headers: { Accept: "application/json" } }
+      );
+      if (!res.ok) return empty;
+      const j = await res.json();
+      let isHoneypot = null;
+      if (j.honeypotResult && typeof j.honeypotResult.isHoneypot === "boolean") {
+        isHoneypot = j.honeypotResult.isHoneypot;
+      }
+      const sim = j.simulationResult || {};
+      return {
+        present: true,
+        isHoneypot,
+        buyTaxPct: numOrNull(sim.buyTax),
+        sellTaxPct: numOrNull(sim.sellTax),
       };
     } catch {
       return empty;
@@ -228,6 +327,11 @@
   }
 
   // ---------- field mapping ----------
+  function numOrNull(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+
   function pctStr(v) {
     const n = Number(v);
     return Number.isFinite(n) ? n * 100 : null;
@@ -411,6 +515,15 @@
       t.holderCount != null && t.holderCount < 100
     );
 
+    // Token age: a brand-new contract should never read fully clean on authority
+    // checks alone. <1h is a strong signal; <24h a softer one. (Mutually exclusive.)
+    add(30, "Token less than 1 hour old", t.ageHours != null && t.ageHours < 1);
+    add(
+      15,
+      "Token less than 24 hours old",
+      t.ageHours != null && t.ageHours >= 1 && t.ageHours < 24
+    );
+
     // Size/liquidity dampener: a large, deeply-liquid token shouldn't be pushed into
     // CRITICAL by mint/ownership/holder-concentration flags alone. Cap that combined
     // contribution so the worst case lands in WARNING (<=60), not CRITICAL. Genuine
@@ -494,6 +607,21 @@
     if (n == null || !Number.isFinite(n)) return "#8FB6A1";
     return n >= 0 ? "#35F58E" : "#FF5470";
   }
+  function fmtAge(hours) {
+    if (hours == null || !Number.isFinite(hours)) return "—";
+    if (hours < 1) return Math.max(1, Math.round(hours * 60)) + "m";
+    if (hours < 24) return Math.round(hours) + "h";
+    const days = hours / 24;
+    if (days < 30) return Math.round(days) + "d";
+    if (days < 365) return Math.round(days / 30) + "mo";
+    return (days / 365).toFixed(1) + "y";
+  }
+  function ageColor(hours) {
+    if (hours == null || !Number.isFinite(hours)) return "#8FB6A1";
+    if (hours < 1) return "#FF5470";
+    if (hours < 24) return "#FFC24D";
+    return "#CFE9DA";
+  }
   function fmtPct(n) {
     if (n == null || !Number.isFinite(n)) return "—";
     return n.toFixed(1) + "%";
@@ -535,6 +663,11 @@
         color: changeColor(t.priceChange24h),
       },
       { label: "Market Cap", value: fmtUsd(t.marketCap), color: "#CFE9DA" },
+      t.ageHours != null && {
+        label: "Token Age",
+        value: fmtAge(t.ageHours),
+        color: ageColor(t.ageHours),
+      },
       { label: "Total Supply", value: fmtNum(t.totalSupply), color: "#CFE9DA" },
       t.holderCount != null && {
         label: "Holder Count",
@@ -582,7 +715,12 @@
 
     const liqRows = [
       { label: "Total Liquidity (USD)", value: fmtUsd(t.liquidityUsd), color: usdColor(t.liquidityUsd) },
-    ];
+      t.lpLockedPct != null && {
+        label: "LP Locked",
+        value: fmtPct(t.lpLockedPct),
+        color: t.lpLockedPct >= 50 ? "#35F58E" : t.lpLockedPct >= 10 ? "#FFC24D" : "#FF5470",
+      },
+    ].filter(Boolean);
 
     let noteHtml = "";
     if (risk.blueChip) {
@@ -599,6 +737,30 @@
       </div>`;
     }
 
+    // Transparency: which best-effort second sources were consulted this scan.
+    const crossBits = [];
+    if (t.rugcheckPresent) {
+      crossBits.push(
+        `RugCheck${t.rugcheckScore != null ? ` (risk ${Math.round(t.rugcheckScore)}/100)` : ""}`
+      );
+    }
+    if (t.honeypotIsPresent) {
+      const v =
+        t.honeypotIsResult === true
+          ? "honeypot flagged"
+          : t.honeypotIsResult === false
+          ? "sell simulated OK"
+          : "no verdict";
+      crossBits.push(`Honeypot.is: ${v}`);
+    }
+    const crossHtml = crossBits.length
+      ? `
+      <div class="context-note context-cross">
+        <span class="context-note-icon">⛓</span>
+        <span>Cross-checked — ${crossBits.join(" · ")}.</span>
+      </div>`
+      : "";
+
     const html = `
       <div class="threat-banner" style="background:${V.bg};border:1px solid ${V.border};box-shadow:0 0 40px -14px ${V.glow};">
         <div class="score-ring" style="background:conic-gradient(${V.color} ${ringDeg}deg, #122E1F ${ringDeg}deg); box-shadow:0 0 26px -6px ${V.glow};">
@@ -614,6 +776,7 @@
         </div>
       </div>
       ${noteHtml}
+      ${crossHtml}
 
       <div class="checklist">
         <div class="checklist-head">
@@ -716,9 +879,14 @@
     }, 340);
 
     try {
-      const [raw, dex] = await Promise.all([
+      // GoPlus is the primary source; DexScreener, RugCheck (Solana) and Honeypot.is
+      // (EVM) are best-effort second opinions that resolve to nulls on failure and
+      // never reject the whole scan.
+      const [raw, dex, rug, hp] = await Promise.all([
         fetchTokenSecurity(chain.id, address, chain.kind),
         fetchDexScreenerData(address, chain.id),
+        chain.kind === "solana" ? fetchRugCheck(address) : Promise.resolve(null),
+        chain.kind === "evm" ? fetchHoneypotIs(address, chain.id) : Promise.resolve(null),
       ]);
       clearInterval(stepTimer);
       checkingBox.hidden = true;
@@ -738,6 +906,31 @@
       t.marketCap = dex.marketCap;
       // Prefer DexScreener's pair liquidity (more reliable) over GoPlus's dex-list sum.
       if (dex.liquidityUsd != null) t.liquidityUsd = dex.liquidityUsd;
+      // Token age from the DexScreener pair creation timestamp.
+      t.ageHours =
+        dex.pairCreatedAt != null ? (Date.now() - dex.pairCreatedAt) / 3.6e6 : null;
+
+      // RugCheck (Solana): fill the holder/LP fields GoPlus leaves empty on Solana.
+      if (rug && rug.present) {
+        if (t.lpLockedPct == null && rug.lpLockedPct != null) t.lpLockedPct = rug.lpLockedPct;
+        if (t.top10Pct == null && rug.top10Pct != null) t.top10Pct = rug.top10Pct;
+        if (t.devPct == null && rug.devPct != null) t.devPct = rug.devPct;
+        t.rugcheckPresent = true;
+        t.rugcheckScore = rug.score;
+      }
+
+      // Honeypot.is (EVM): second-opinion honeypot verdict + measured taxes.
+      if (hp && hp.present) {
+        // If either provider flags a honeypot, treat it as one (forces CRITICAL).
+        if (hp.isHoneypot === true) t.isHoneypot = true;
+        // Use the more conservative (higher) tax reading when both report one.
+        if (hp.buyTaxPct != null)
+          t.buyTaxPct = t.buyTaxPct != null ? Math.max(t.buyTaxPct, hp.buyTaxPct) : hp.buyTaxPct;
+        if (hp.sellTaxPct != null)
+          t.sellTaxPct = t.sellTaxPct != null ? Math.max(t.sellTaxPct, hp.sellTaxPct) : hp.sellTaxPct;
+        t.honeypotIsPresent = true;
+        t.honeypotIsResult = hp.isHoneypot;
+      }
 
       renderResult(t, {
         address,

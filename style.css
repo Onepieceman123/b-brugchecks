@@ -81,6 +81,8 @@ h1.glitch{font-family:'Chakra Petch',sans-serif;font-weight:700;font-size:62px;l
 .threat-banner{position:relative;border-radius:14px;padding:26px 28px;display:flex;align-items:center;gap:26px;flex-wrap:wrap;}
 .context-note{margin-top:12px;display:flex;align-items:flex-start;gap:10px;border-radius:11px;padding:13px 16px;font-size:13px;line-height:1.5;}
 .context-blue{background:rgba(8,20,13,.85);border:1px solid #1F7A4D;color:#9FE9C2;}
+.context-cross{background:rgba(7,14,10,.7);border:1px solid #163A28;color:#7DA890;}
+.context-cross .context-note-icon{color:#5C8C72;}
 .context-note-icon{flex-shrink:0;font-weight:700;color:#35F58E;}
 .score-ring{width:118px;height:118px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;}
 .score-ring-inner{width:92px;height:92px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#060B08;}
