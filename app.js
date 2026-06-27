@@ -360,9 +360,10 @@
       }
     };
 
-    // "Authority" flags (mint active / ownership not renounced) are the signals that
-    // are red flags for a fresh memecoin but normal for large, liquid, widely-held
-    // tokens. Track their contribution separately so size/liquidity can damp them.
+    // "Dampenable" flags — active mint authority, non-renounced ownership, and
+    // holder concentration — are red flags for a fresh memecoin but normal for a
+    // large, liquid, widely-held token. Track their contribution separately so
+    // size/liquidity can cap it (see dampener below).
     let authorityPts = 0;
     const addAuthority = (pts, label, cond) => {
       if (cond) {
@@ -377,6 +378,12 @@
       "Ownership not renounced / hidden owner / can reclaim ownership",
       t.ownerRenounced === false || t.hiddenOwner || t.canTakeBackOwnership
     );
+    addAuthority(25, "Top 10 holders > 50%", t.top10Pct != null && t.top10Pct > 50);
+    addAuthority(
+      10,
+      "Top 10 holders 30–50%",
+      t.top10Pct != null && t.top10Pct >= 30 && t.top10Pct <= 50
+    );
 
     add(30, "Freeze authority active", t.freezeActive === true);
     add(
@@ -384,7 +391,6 @@
       "Sell tax > 10%",
       t.sellTaxPct != null && t.sellTaxPct > 10
     );
-    add(25, "Top 10 holders > 50%", t.top10Pct != null && t.top10Pct > 50);
     add(20, "LP not locked", t.lpLockedPct != null && t.lpLockedPct < 50);
     add(20, "Not open source", t.isOpenSource === false);
     add(15, "Dev/creator wallet > 10%", t.devPct != null && t.devPct > 10);
@@ -401,19 +407,15 @@
     );
     add(
       10,
-      "Top 10 holders 30–50%",
-      t.top10Pct != null && t.top10Pct >= 30 && t.top10Pct <= 50
-    );
-    add(
-      10,
       "Holder count < 100",
       t.holderCount != null && t.holderCount < 100
     );
 
     // Size/liquidity dampener: a large, deeply-liquid token shouldn't be pushed into
-    // CRITICAL by authority flags alone. Cap the authority contribution so the worst
-    // case lands in WARNING (<=60), not CRITICAL. Genuine danger from concentrated
-    // holders, honeypots, taxes, etc. (the `score` bucket) is untouched.
+    // CRITICAL by mint/ownership/holder-concentration flags alone. Cap that combined
+    // contribution so the worst case lands in WARNING (<=60), not CRITICAL. Genuine
+    // danger from honeypots (forced above), freeze authority, taxes, unlocked LP, etc.
+    // (the `score` bucket) is untouched and can still escalate to CRITICAL.
     const isLargeLiquid =
       t.marketCap != null && t.marketCap > 50e6 &&
       t.liquidityUsd != null && t.liquidityUsd > 1e6;
@@ -534,8 +536,12 @@
       },
       { label: "Market Cap", value: fmtUsd(t.marketCap), color: "#CFE9DA" },
       { label: "Total Supply", value: fmtNum(t.totalSupply), color: "#CFE9DA" },
-      { label: "Holder Count", value: fmtNum(t.holderCount), color: "#CFE9DA" },
-    ];
+      t.holderCount != null && {
+        label: "Holder Count",
+        value: fmtNum(t.holderCount),
+        color: "#CFE9DA",
+      },
+    ].filter(Boolean);
 
     const secRows = [
       t.mintActive != null && {
@@ -648,7 +654,7 @@
 
         <div class="checklist-footer">
           <button class="new-scan-btn" id="newScanBtn">&gt; NEW SCAN</button>
-          <div class="dyor-note">Signals read on-chain at scan time via the GoPlus Security API. This is not financial advice — always DYOR before aping in.</div>
+          <div class="dyor-note">Signals read on-chain at scan time via GoPlus Security + DexScreener. This is not financial advice — always DYOR before aping in.</div>
         </div>
       </div>
     `;
